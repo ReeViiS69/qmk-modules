@@ -46,6 +46,29 @@ These lines specify that SOCD filtering is to be performed on the WASD keys
 priority resolution (`SOCD_CLEANER_LAST`). If you want to do something else,
 this is where to change that.
 
+### Optional mouse cursor support
+
+Mouse cursor directions can be used as opposing pairs when the module's mouse
+support is explicitly enabled in `config.h`:
+
+```c
+#define SOCD_CLEANER_MOUSEKEY_ENABLE
+```
+
+For example:
+
+```c
+socd_cleaner_t socd_opposing_pairs[] = {
+  {{MS_UP, MS_DOWN}, SOCD_CLEANER_LAST},
+  {{MS_LEFT, MS_RGHT}, SOCD_CLEANER_LAST},
+};
+```
+
+When `SOCD_CLEANER_MOUSEKEY_ENABLE` is not defined, the mouse-specific code is
+not compiled. The current mouse event is left to QMK's normal processing; the
+module only synthesizes the opposing mouse cursor key when SOCD resolution
+requires it.
+
 Resolution strategies:
 
 * `SOCD_CLEANER_LAST`: (Recommended) Last input priority with reactivation. The

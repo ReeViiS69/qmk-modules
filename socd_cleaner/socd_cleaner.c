@@ -30,12 +30,31 @@ socd_cleaner_t* socd_opposing_pairs_get(uint16_t index);
 
 bool socd_cleaner_enabled = true;
 
+#ifdef SOCD_CLEANER_MOUSEKEY_ENABLE
+/**
+ * Updates a key that SOCD Cleaner needs to synthesize. Returns true when the
+ * key is a mouse cursor key and its mouse report is handled by QMK directly.
+ */
+static bool update_key(uint8_t keycode, bool press) {
+  if (IS_MOUSEKEY_MOVE(keycode)) {
+    if (press) {
+      register_code(keycode);
+    } else {
+      unregister_code(keycode);
+    }
+    return true;
+  }
+#else
 static void update_key(uint8_t keycode, bool press) {
+#endif
   if (press) {
     add_key(keycode);
   } else {
     del_key(keycode);
   }
+#ifdef SOCD_CLEANER_MOUSEKEY_ENABLE
+  return false;
+#endif
 }
 
 static bool process_opposing_pair(
@@ -64,9 +83,17 @@ static bool process_opposing_pair(
       case SOCD_CLEANER_NEUTRAL:  // Neutral resolution.
         // Same logic as SOCD_CLEANER_LAST, but skip default handling so that
         // the current key has no effect while the opposing key is held.
+#ifdef SOCD_CLEANER_MOUSEKEY_ENABLE
+        // Mouse cursor registration sends its own mouse report. Keyboard keys
+        // still need the report that default handling would normally send.
+        if (!update_key(state->keys[opposing], !state->held[i])) {
+          send_keyboard_report();
+        }
+#else
         update_key(state->keys[opposing], !state->held[i]);
         // Send updated report (normally, default handling would do this).
         send_keyboard_report();
+#endif
         return false;  // Skip default handling.
 
       case SOCD_CLEANER_0_WINS:  // Key 0 wins.
