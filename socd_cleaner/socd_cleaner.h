@@ -73,6 +73,10 @@ typedef struct {
   uint8_t keys[2];  // Basic keycodes for the two opposing keys.
   uint8_t resolution;  // Resolution strategy.
   bool held[2];  // Tracks which keys are physically held.
+#if defined(SOCD_CLEANER_RELEASE_DELAY_MS) && SOCD_CLEANER_RELEASE_DELAY_MS > 0
+  bool delayed_release_pending[2];  // Pending artificial release per key.
+  uint16_t delayed_release_timer[2];  // QMK timer timestamp per key.
+#endif
 } socd_cleaner_t;
 
 /** Determines globally whether SOCD cleaner is enabled. */

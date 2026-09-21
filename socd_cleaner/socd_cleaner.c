@@ -22,6 +22,14 @@
 
 #include "socd_cleaner.h"
 
+#if defined(SOCD_CLEANER_RELEASE_DELAY_MS) && SOCD_CLEANER_RELEASE_DELAY_MS > 1000
+#  error "SOCD_CLEANER_RELEASE_DELAY_MS must be <= 1000"
+#endif
+
+#if defined(SOCD_CLEANER_RELEASE_DELAY_MS) && SOCD_CLEANER_RELEASE_DELAY_MS > 0
+#  include "timer.h"
+#endif
+
 ASSERT_COMMUNITY_MODULES_MIN_API_VERSION(1, 0, 0);
 
 // Defined in introspection.c.
@@ -29,6 +37,28 @@ uint16_t socd_opposing_pairs_count(void);
 socd_cleaner_t* socd_opposing_pairs_get(uint16_t index);
 
 bool socd_cleaner_enabled = true;
+
+#if defined(SOCD_CLEANER_RELEASE_DELAY_MS) && SOCD_CLEANER_RELEASE_DELAY_MS > 0
+static void cancel_delayed_release(socd_cleaner_t* state, uint8_t index) {
+  state->delayed_release_pending[index] = false;
+}
+
+static void schedule_delayed_release(socd_cleaner_t* state, uint8_t index) {
+  state->delayed_release_pending[index] = true;
+  state->delayed_release_timer[index] = timer_read();
+}
+
+static void cancel_all_delayed_releases(void) {
+  for (uint16_t pair = 0; pair < socd_opposing_pairs_count(); ++pair) {
+    socd_cleaner_t* state = socd_opposing_pairs_get(pair);
+    if (!state) {
+      continue;
+    }
+    state->delayed_release_pending[0] = false;
+    state->delayed_release_pending[1] = false;
+  }
+}
+#endif
 
 #ifdef SOCD_CLEANER_MOUSEKEY_ENABLE
 /**
@@ -68,6 +98,11 @@ static bool process_opposing_pair(
   const uint8_t i = (keycode == state->keys[1]);
   const uint8_t opposing = i ^ 1;  // Index of the opposing key.
 
+#if defined(SOCD_CLEANER_RELEASE_DELAY_MS) && SOCD_CLEANER_RELEASE_DELAY_MS > 0
+  // A physical event on this key supersedes any pending synthetic release.
+  cancel_delayed_release(state, i);
+#endif
+
   // Track which keys are physically held (vs. keys in the report).
   state->held[i] = record->event.pressed;
 
@@ -75,9 +110,31 @@ static bool process_opposing_pair(
   if (state->held[opposing]) {
     switch (state->resolution) {
       case SOCD_CLEANER_LAST:  // Last input priority with reactivation.
+#if defined(SOCD_CLEANER_RELEASE_DELAY_MS) && SOCD_CLEANER_RELEASE_DELAY_MS > 0
+        if (record->event.pressed) {
+#  ifdef SOCD_CLEANER_MOUSEKEY_ENABLE
+          if (IS_MOUSEKEY_MOVE(state->keys[opposing])) {
+            // Mouse cursor directions always keep the original immediate SOCD
+            // behavior. Release delay applies only to keyboard keys.
+            update_key(state->keys[opposing], false);
+          } else
+#  endif
+          {
+            // Let the new key press continue immediately. Only the synthetic
+            // release of the previously active keyboard key is delayed.
+            schedule_delayed_release(state, opposing);
+          }
+        } else {
+          // Reactivate the still physically held opposing key immediately. If
+          // its delayed release has not fired yet, cancel that release first.
+          cancel_delayed_release(state, opposing);
+          update_key(state->keys[opposing], true);
+        }
+#else
         // If the current event is a press, then release the opposing key.
         // Otherwise if this is a release, then press the opposing key.
         update_key(state->keys[opposing], !state->held[i]);
+#endif
         break;
 
       case SOCD_CLEANER_NEUTRAL:  // Neutral resolution.
@@ -120,11 +177,19 @@ bool process_record_socd_cleaner(uint16_t keycode, keyrecord_t* record) {
       return false;
     case SOCDOFF:  // Turn SOCD Cleaner off.
       if (record->event.pressed) {
+#if defined(SOCD_CLEANER_RELEASE_DELAY_MS) && SOCD_CLEANER_RELEASE_DELAY_MS > 0
+        cancel_all_delayed_releases();
+#endif
         socd_cleaner_enabled = false;
       }
       return false;
     case SOCDTOG:  // Toggle SOCD Cleaner.
       if (record->event.pressed) {
+#if defined(SOCD_CLEANER_RELEASE_DELAY_MS) && SOCD_CLEANER_RELEASE_DELAY_MS > 0
+        if (socd_cleaner_enabled) {
+          cancel_all_delayed_releases();
+        }
+#endif
         socd_cleaner_enabled = !socd_cleaner_enabled;
       }
       return false;
@@ -141,3 +206,37 @@ bool process_record_socd_cleaner(uint16_t keycode, keyrecord_t* record) {
   return true;
 }
 
+
+#if defined(SOCD_CLEANER_RELEASE_DELAY_MS) && SOCD_CLEANER_RELEASE_DELAY_MS > 0
+void housekeeping_task_socd_cleaner(void) {
+  if (!socd_cleaner_enabled) {
+    return;
+  }
+
+  for (uint16_t pair = 0; pair < socd_opposing_pairs_count(); ++pair) {
+    socd_cleaner_t* state = socd_opposing_pairs_get(pair);
+    if (!state || state->resolution != SOCD_CLEANER_LAST) {
+      continue;
+    }
+
+    for (uint8_t key = 0; key < 2; ++key) {
+      if (!state->delayed_release_pending[key] ||
+          timer_elapsed(state->delayed_release_timer[key]) <
+              SOCD_CLEANER_RELEASE_DELAY_MS) {
+        continue;
+      }
+
+      state->delayed_release_pending[key] = false;
+
+      // A physical release cancels the pending synthetic release before this
+      // task runs. Only release a key that is still physically held.
+      if (!state->held[key]) {
+        continue;
+      }
+
+      update_key(state->keys[key], false);
+      send_keyboard_report();
+    }
+  }
+}
+#endif

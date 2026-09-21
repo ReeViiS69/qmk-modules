@@ -69,6 +69,26 @@ not compiled. The current mouse event is left to QMK's normal processing; the
 module only synthesizes the opposing mouse cursor key when SOCD resolution
 requires it.
 
+### Optional release delay for `SOCD_CLEANER_LAST`
+
+The synthetic release of the previously active **keyboard** key can optionally
+be delayed while the newly pressed key is still processed immediately. Enable
+it in `config.h`, for example:
+
+```c
+#define SOCD_CLEANER_RELEASE_DELAY_MS 20
+```
+
+The delay must be between 1 and 1000 ms. Values above 1000 ms fail at compile
+time. The implementation uses QMK's 16-bit `timer_read()` / `timer_elapsed()`
+API; no private hardware timer is created.
+
+If `SOCD_CLEANER_RELEASE_DELAY_MS` is not defined, or is defined as `0`, all
+delay state, timer code, and housekeeping code are excluded at compile time and
+`SOCD_CLEANER_LAST` keeps its original immediate-release behavior. Mouse cursor
+directions never use this delay; with mouse support enabled they retain the
+normal immediate SOCD behavior.
+
 Resolution strategies:
 
 * `SOCD_CLEANER_LAST`: (Recommended) Last input priority with reactivation. The
