@@ -72,22 +72,28 @@ requires it.
 ### Optional release delay for `SOCD_CLEANER_LAST`
 
 The synthetic release of the previously active **keyboard** key can optionally
-be delayed while the newly pressed key is still processed immediately. Enable
-it in `config.h`, for example:
+be delayed while the newly pressed key is still processed immediately. For a
+fixed delay, define only the minimum in `config.h`:
 
 ```c
-#define SOCD_CLEANER_RELEASE_DELAY_MS 20
+#define SOCD_CLEANER_RELEASE_DELAY_MIN_MS 20
 ```
 
-The delay must be between 1 and 1000 ms. Values above 1000 ms fail at compile
-time. The implementation uses QMK's 16-bit `timer_read()` / `timer_elapsed()`
-API; no private hardware timer is created.
+For a pseudo-random delay range, also define a maximum:
 
-If `SOCD_CLEANER_RELEASE_DELAY_MS` is not defined, or is defined as `0`, all
-delay state, timer code, and housekeeping code are excluded at compile time and
-`SOCD_CLEANER_LAST` keeps its original immediate-release behavior. Mouse cursor
-directions never use this delay; with mouse support enabled they retain the
-normal immediate SOCD behavior.
+```c
+#define SOCD_CLEANER_RELEASE_DELAY_MIN_MS 2
+#define SOCD_CLEANER_RELEASE_DELAY_MAX_MS 30
+```
+
+The random range is inclusive. Equal minimum and maximum values are treated as
+a fixed delay. Delay values must be between 0 and 1000 ms; defining `MAX_MS`
+without `MIN_MS`, or a maximum below the minimum, fails at compile time. A
+fixed minimum of `0` disables the feature completely.
+
+The implementation uses QMK's 16-bit `timer_read()` / `timer_elapsed()` API.
+Mouse cursor directions never use this delay; with mouse support enabled they
+retain the normal immediate SOCD behavior.
 
 Resolution strategies:
 

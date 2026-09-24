@@ -22,11 +22,7 @@
 
 #include "socd_cleaner.h"
 
-#if defined(SOCD_CLEANER_RELEASE_DELAY_MS) && SOCD_CLEANER_RELEASE_DELAY_MS > 1000
-#  error "SOCD_CLEANER_RELEASE_DELAY_MS must be <= 1000"
-#endif
-
-#if defined(SOCD_CLEANER_RELEASE_DELAY_MS) && SOCD_CLEANER_RELEASE_DELAY_MS > 0
+#ifdef SOCD_CLEANER_RELEASE_DELAY_MIN_MS
 #  include "timer.h"
 #endif
 
@@ -38,7 +34,33 @@ socd_cleaner_t* socd_opposing_pairs_get(uint16_t index);
 
 bool socd_cleaner_enabled = true;
 
-#if defined(SOCD_CLEANER_RELEASE_DELAY_MS) && SOCD_CLEANER_RELEASE_DELAY_MS > 0
+#ifdef SOCD_CLEANER_RELEASE_DELAY_MIN_MS
+#  ifdef SOCD_CLEANER_RELEASE_DELAY_MAX_MS
+#    define SOCD_CLEANER_RANDOM_MASK \
+      ((1UL << (sizeof(unsigned long) * 8 - \
+                __builtin_clzl((unsigned long)(SOCD_CLEANER_RELEASE_DELAY_MAX_MS - \
+                                               SOCD_CLEANER_RELEASE_DELAY_MIN_MS)))) - 1UL)
+
+static uint16_t socd_prng_state = 0xA5C3U;
+
+static uint16_t socd_prng(void) {
+  socd_prng_state ^= socd_prng_state << 7;
+  socd_prng_state ^= socd_prng_state >> 9;
+  socd_prng_state ^= socd_prng_state << 8;
+  return socd_prng_state;
+}
+
+static uint16_t random_release_delay(void) {
+  uint16_t offset;
+  do {
+    offset = (uint16_t)(socd_prng() & SOCD_CLEANER_RANDOM_MASK);
+  } while (offset > SOCD_CLEANER_RELEASE_DELAY_MAX_MS -
+                        SOCD_CLEANER_RELEASE_DELAY_MIN_MS);
+
+  return SOCD_CLEANER_RELEASE_DELAY_MIN_MS + offset;
+}
+#  endif
+
 static void cancel_delayed_release(socd_cleaner_t* state, uint8_t index) {
   state->delayed_release_pending[index] = false;
 }
@@ -46,6 +68,12 @@ static void cancel_delayed_release(socd_cleaner_t* state, uint8_t index) {
 static void schedule_delayed_release(socd_cleaner_t* state, uint8_t index) {
   state->delayed_release_pending[index] = true;
   state->delayed_release_timer[index] = timer_read();
+#  ifdef SOCD_CLEANER_RELEASE_DELAY_MAX_MS
+  // Stir in the event timing at no additional timer-read cost.
+  socd_prng_state =
+      (socd_prng_state ^ state->delayed_release_timer[index]) | 1U;
+  state->delayed_release_delay[index] = random_release_delay();
+#  endif
 }
 
 static void cancel_all_delayed_releases(void) {
@@ -98,7 +126,7 @@ static bool process_opposing_pair(
   const uint8_t i = (keycode == state->keys[1]);
   const uint8_t opposing = i ^ 1;  // Index of the opposing key.
 
-#if defined(SOCD_CLEANER_RELEASE_DELAY_MS) && SOCD_CLEANER_RELEASE_DELAY_MS > 0
+#ifdef SOCD_CLEANER_RELEASE_DELAY_MIN_MS
   // A physical event on this key supersedes any pending synthetic release.
   cancel_delayed_release(state, i);
 #endif
@@ -110,7 +138,7 @@ static bool process_opposing_pair(
   if (state->held[opposing]) {
     switch (state->resolution) {
       case SOCD_CLEANER_LAST:  // Last input priority with reactivation.
-#if defined(SOCD_CLEANER_RELEASE_DELAY_MS) && SOCD_CLEANER_RELEASE_DELAY_MS > 0
+#ifdef SOCD_CLEANER_RELEASE_DELAY_MIN_MS
         if (record->event.pressed) {
 #  ifdef SOCD_CLEANER_MOUSEKEY_ENABLE
           if (IS_MOUSEKEY_MOVE(state->keys[opposing])) {
@@ -177,7 +205,7 @@ bool process_record_socd_cleaner(uint16_t keycode, keyrecord_t* record) {
       return false;
     case SOCDOFF:  // Turn SOCD Cleaner off.
       if (record->event.pressed) {
-#if defined(SOCD_CLEANER_RELEASE_DELAY_MS) && SOCD_CLEANER_RELEASE_DELAY_MS > 0
+#ifdef SOCD_CLEANER_RELEASE_DELAY_MIN_MS
         cancel_all_delayed_releases();
 #endif
         socd_cleaner_enabled = false;
@@ -185,7 +213,7 @@ bool process_record_socd_cleaner(uint16_t keycode, keyrecord_t* record) {
       return false;
     case SOCDTOG:  // Toggle SOCD Cleaner.
       if (record->event.pressed) {
-#if defined(SOCD_CLEANER_RELEASE_DELAY_MS) && SOCD_CLEANER_RELEASE_DELAY_MS > 0
+#ifdef SOCD_CLEANER_RELEASE_DELAY_MIN_MS
         if (socd_cleaner_enabled) {
           cancel_all_delayed_releases();
         }
@@ -207,7 +235,7 @@ bool process_record_socd_cleaner(uint16_t keycode, keyrecord_t* record) {
 }
 
 
-#if defined(SOCD_CLEANER_RELEASE_DELAY_MS) && SOCD_CLEANER_RELEASE_DELAY_MS > 0
+#ifdef SOCD_CLEANER_RELEASE_DELAY_MIN_MS
 void housekeeping_task_socd_cleaner(void) {
   if (!socd_cleaner_enabled) {
     return;
@@ -220,9 +248,17 @@ void housekeeping_task_socd_cleaner(void) {
     }
 
     for (uint8_t key = 0; key < 2; ++key) {
-      if (!state->delayed_release_pending[key] ||
-          timer_elapsed(state->delayed_release_timer[key]) <
-              SOCD_CLEANER_RELEASE_DELAY_MS) {
+      if (!state->delayed_release_pending[key]) {
+        continue;
+      }
+
+#  ifdef SOCD_CLEANER_RELEASE_DELAY_MAX_MS
+      if (timer_elapsed(state->delayed_release_timer[key]) <
+          state->delayed_release_delay[key]) {
+#  else
+      if (timer_elapsed(state->delayed_release_timer[key]) <
+          SOCD_CLEANER_RELEASE_DELAY_MIN_MS) {
+#  endif
         continue;
       }
 
